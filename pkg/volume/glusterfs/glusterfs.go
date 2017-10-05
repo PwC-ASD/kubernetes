@@ -82,6 +82,7 @@ const (
 	absoluteGidMax          = math.MaxInt32
 	linuxGlusterMountBinary = "mount.glusterfs"
 	autoUnmountBinaryVer    = "3.11"
+	snapshotFactor          = 1.0
 )
 
 func (plugin *glusterfsPlugin) Init(host volume.VolumeHost) error {
@@ -342,7 +343,7 @@ func (b *glusterfsMounter) setUpAtInternal(dir string) error {
 			return nil
 		}
 
-		const invalidOption = "Invalid option auto_unmount"
+		const invalidOption = "Invalid"
 		if dstrings.Contains(errs.Error(), invalidOption) {
 			// Give a try without `auto_unmount` mount option, because
 			// it could be that gluster fuse client is older version and
@@ -780,7 +781,25 @@ func (p *glusterfsVolumeProvisioner) CreateVolume(gid int) (r *v1.GlusterfsVolum
 		glog.V(4).Infof("glusterfs: provided clusterIDs: %v", clusterIDs)
 	}
 	gid64 := int64(gid)
-	volumeReq := &gapi.VolumeCreateRequest{Size: sz, Clusters: clusterIDs, Gid: gid64, Durability: p.volumeType}
+
+	enableFactor := false
+	factor := float32(snapshotFactor)
+	if annotationValue, found := p.options.PVC.Annotations["volume.beta.kubernetes.io/snapshot-factor"]; found {
+		parseFactor, err := strconv.ParseFloat(annotationValue,32)
+		if err != nil {
+			glog.Errorf("glusterfs: error parsing snapshot-factor value %v ", err)
+			return nil, 0, fmt.Errorf("error parsing snapshot-factor value %v", err)
+		}
+		enableFactor = true
+		factor = float32(parseFactor)
+	}
+
+	volumeReq := &gapi.VolumeCreateRequest{Size: sz, Clusters: clusterIDs, Gid: gid64, Durability: p.volumeType,
+		Snapshot: struct {
+			Enable bool `json:"enable"`
+			Factor float32 `json:"factor"`
+		} {Enable: enableFactor, Factor: factor},
+	}
 	volume, err := cli.VolumeCreate(volumeReq)
 	if err != nil {
 		glog.Errorf("glusterfs: error creating volume %v ", err)
